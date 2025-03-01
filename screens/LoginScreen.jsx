@@ -167,13 +167,7 @@ export default function LoginScreen() {
       <TouchableWithoutFeedback onPress={Keyboard.dismiss}>
         <SafeAreaView style={styles.inner}>
           <View style={styles.logoContainer}>
-            <Image
-              source={{
-                uri: "https://api.a0.dev/assets/image?text=Artastic%203D%20logo%20with%20purple%20color%20scheme&aspect=1:1",
-              }}
-              style={styles.logo}
-            />
-            <Text style={styles.title}>Artastic 3D</Text>
+            <Image source={require("../assets/logo.png")} style={styles.logo} />
             <Text style={styles.subtitle}>Gestión de impresiones 3D</Text>
           </View>
 
@@ -313,10 +307,9 @@ const styles = StyleSheet.create({
     marginTop: 40,
   },
   logo: {
-    width: 120,
-    height: 120,
-    marginBottom: 16,
+    width: 300,
     borderRadius: 20,
+    height: 100,
   },
   title: {
     fontSize: 28,

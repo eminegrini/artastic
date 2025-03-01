@@ -1,7 +1,7 @@
 {
   "expo": {
     "name": "a0-project",
-    "slug": "snack-0df826f4-ec87-4cc3-be43-427afba06bcb",
+    "slug": "artastic",
     "version": "1.0.0",
     "orientation": "portrait",
     "icon": "./assets/icon.png",
@@ -29,11 +29,21 @@
       "adaptiveIcon": {
         "foregroundImage": "./assets/adaptive-icon.png",
         "backgroundColor": "#ffffff"
-      }
+      },
+      "permissions": [
+        "android.permission.CAMERA",
+        "android.permission.RECORD_AUDIO"
+      ]
     },
     "web": {
       "favicon": "./assets/favicon.png"
     },
-    "description": "Quickly generate React Native components with AI"
+    "description": "Quickly generate React Native components with AI",
+    "extra": {
+      "eas": {
+        "projectId": "cbf8cd56-7956-4a9c-b2fd-f16f6417ce70"
+      }
+    },
+    "owner": "emi93"
   }
 }

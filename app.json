@@ -2,9 +2,9 @@
   "expo": {
     "name": "a0-project",
     "slug": "artastic",
-    "version": "1.0.0",
+    "version": "1.0.1",
     "orientation": "portrait",
-    "icon": "./assets/icon.png",
+    "icon": "./assets/logo.png",
     "userInterfaceStyle": "light",
     "newArchEnabled": true,
     "plugins": [
@@ -33,7 +33,9 @@
       "permissions": [
         "android.permission.CAMERA",
         "android.permission.RECORD_AUDIO"
-      ]
+      ],
+      "package": "com.emi93.artastic",
+      "versionCode": 3
     },
     "web": {
       "favicon": "./assets/favicon.png"

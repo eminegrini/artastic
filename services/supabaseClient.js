@@ -17,7 +17,6 @@ const supabase = createClient(supabaseUrl, supabaseKey, {
   },
 });
 
-// Funciones para interactuar con la base de datos
 export const supabaseService = {
   // Funciones para piezas
   async getPieces() {
@@ -236,7 +235,7 @@ export const supabaseService = {
       .select(
         `
         *,
-        clients (*)
+        clients:clients (*)
       `
       )
       .order("created_at", { ascending: false });
@@ -275,7 +274,7 @@ export const supabaseService = {
       .select(
         `
         *,
-        clients (*)
+        clients:clients (*)
       `
       )
       .eq("id", id)
@@ -309,6 +308,8 @@ export const supabaseService = {
       .insert([
         {
           client_name: order.client_name,
+          description: order.description,
+          deposit: order.deposit,
           client_id: order.client_id,
           total_price: order.total_price,
           status: order.status,
@@ -346,7 +347,6 @@ export const supabaseService = {
   },
 
   async updateOrder(id, updates) {
-    console.log("<<<<<<<<<<<<<<<<<actua", updates);
     const { data, error } = await supabase
       .from("orders")
       .update(updates)

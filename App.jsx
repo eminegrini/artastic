@@ -26,7 +26,6 @@ import {
   getThemeColors,
 } from "./context/ThemeContext";
 import { supabase } from "./services/supabaseClient";
-
 // Screens
 import HomeScreen from "./screens/HomeScreen";
 import StockScreen from "./screens/StockScreen";
@@ -217,7 +216,6 @@ function AppContainer({ isLoading, userSession }) {
         barStyle={colors.statusBar}
         backgroundColor={colors.background}
       />
-      <Toaster theme={isDarkMode ? "dark" : "light"} />
       <AppProvider>
         <NavigationContainer>
           <Stack.Navigator screenOptions={{ headerShown: false }}>
@@ -231,6 +229,7 @@ function AppContainer({ isLoading, userSession }) {
             )}
           </Stack.Navigator>
         </NavigationContainer>
+        <Toaster theme={isDarkMode ? "dark" : "light"} />
       </AppProvider>
     </SafeAreaProvider>
   );

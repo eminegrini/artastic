@@ -240,7 +240,7 @@ export default function ClientsScreen() {
             {item.phone || "Sin teléfono"}
           </Text>
           <Text style={[styles.clientDetail, { color: colors.textSecondary }]}>
-            {item.address || "Sin teléfono"}
+            {item.address || "Sin dirección"}
           </Text>
         </View>
         <View style={styles.clientActions}>

@@ -15,7 +15,7 @@ import {
 import { supabase } from "../services/supabaseClient";
 import { SafeAreaView } from "react-native-safe-area-context";
 import { Ionicons, MaterialIcons, FontAwesome5 } from "@expo/vector-icons";
-import { useNavigation } from "@react-navigation/native";
+import { useFocusEffect, useNavigation } from "@react-navigation/native";
 import { useTheme, getThemeColors } from "../context/ThemeContext";
 import { useAppContext } from "../context/AppContext";
 import { toast } from "sonner-native";
@@ -53,6 +53,8 @@ export default function OrdersScreen() {
   const [deliveryDate, setDeliveryDate] = useState(new Date());
   const [showDatePicker, setShowDatePicker] = useState(false);
   const [totalPrice, setTotalPrice] = useState(0);
+  const [orderDescription, setOrderDescription] = useState("");
+  const [deposit, setDeposit] = useState("");
 
   // Estados para selección de productos
   const [showProductModal, setShowProductModal] = useState(false);
@@ -64,14 +66,22 @@ export default function OrdersScreen() {
   // Estado para el selector de cliente
   const [showClientModal, setShowClientModal] = useState(false);
   const [clientSearchQuery, setClientSearchQuery] = useState("");
-  const [filteredClients, setFilteredClients] = useState([]);
+  const [filteredClients, setFilteredClients] = useState([]); // Estados para venta rápida
+  const [quickSaleModalVisible, setQuickSaleModalVisible] = useState(false);
+  const [quickSaleProduct, setQuickSaleProduct] = useState(null);
+  const [quickSaleQuantity, setQuickSaleQuantity] = useState("1");
+  const [quickSalePrice, setQuickSalePrice] = useState("");
+  const [quickSaleNote, setQuickSaleNote] = useState("");
+  const [quickSaleLoading, setQuickSaleLoading] = useState(false);
 
   // Cargar datos al inicio
-  useEffect(() => {
-    fetchOrders();
-    fetchClients();
-    fetchPieces();
-  }, []); // Filtrar órdenes basadas en el estado seleccionado y la búsqueda
+  useFocusEffect(
+    React.useCallback(() => {
+      fetchOrders();
+      fetchClients();
+      fetchPieces();
+    }, [])
+  );
   useEffect(() => {
     if (!orders || !Array.isArray(orders) || orders.length === 0) {
       setFilteredOrders([]);
@@ -80,9 +90,20 @@ export default function OrdersScreen() {
 
     let result = [...orders]; // Clonar array para evitar problemas de referencia
 
-    // Filtrar por estado
-    if (filterStatus !== "all") {
-      result = result.filter((order) => order && order.status === filterStatus);
+    // Filtrar por estado o tipo
+    if (filterStatus === "quick_sale") {
+      // Filtrar ventas rápidas por el tipo
+      result = result.filter(
+        (order) => order && order.order_type === "quick_sale"
+      );
+    } else if (filterStatus !== "all") {
+      // Filtrar por estado normal (pendiente/entregado) excluyendo ventas rápidas
+      result = result.filter(
+        (order) =>
+          order &&
+          order.status === filterStatus &&
+          (order.order_type !== "quick_sale" || order.order_type === undefined)
+      );
     }
 
     // Filtrar por búsqueda
@@ -94,7 +115,14 @@ export default function OrdersScreen() {
         const clientName =
           order.client && order.client.name
             ? order.client.name.toLowerCase()
+            : order.client_name
+            ? order.client_name.toLowerCase()
             : "";
+
+        // Buscar por descripción
+        const descriptionMatch =
+          order.description &&
+          order.description.toLowerCase().includes(searchQuery.toLowerCase());
 
         // Buscar por productos
         const itemsMatch =
@@ -115,7 +143,11 @@ export default function OrdersScreen() {
               })
             : false;
 
-        return clientName.includes(searchQuery.toLowerCase()) || itemsMatch;
+        return (
+          clientName.includes(searchQuery.toLowerCase()) ||
+          itemsMatch ||
+          descriptionMatch
+        );
       });
     }
 
@@ -167,7 +199,7 @@ export default function OrdersScreen() {
       console.warn("Error formatting date:", error);
       return "Fecha inválida";
     }
-  }; // Estados para búsqueda de productos
+  }; // Estados para búsqueda de productos en modal normal
   const [productSearchQuery, setProductSearchQuery] = useState("");
   const [filteredPieces, setFilteredPieces] = useState([]);
 
@@ -198,14 +230,17 @@ export default function OrdersScreen() {
     resetForm();
     setModalVisible(true);
   };
-
   const openEditModal = (order) => {
     if (!order) return;
     setIsEditing(true);
     setCurrentOrder(order);
     // Cargar datos del pedido
-    setSelectedClient(order.clients || null);
+    setSelectedClient(order.client || null);
     setOrderStatus(order.status || "pending");
+    setOrderDescription(order.description || "");
+
+    // Cargar seña/depósito
+    setDeposit(order.deposit ? String(order.deposit) : "");
 
     // Configurar fecha de entrega
     if (order.delivery_date) {
@@ -241,13 +276,14 @@ export default function OrdersScreen() {
 
     setModalVisible(true);
   };
-
   const resetForm = () => {
     setSelectedClient(null);
     setOrderItems([]);
     setOrderStatus("pending");
     setDeliveryDate(new Date());
     setTotalPrice(0);
+    setOrderDescription("");
+    setDeposit("");
   };
 
   // Funciones para gestionar items
@@ -341,7 +377,99 @@ export default function OrdersScreen() {
     }
   };
 
-  // Validar y guardar pedido
+  const handleQuickSale = async () => {
+    if (!quickSaleProduct) {
+      toast.error("Debes seleccionar un producto");
+      return;
+    }
+
+    const qty = Number(quickSaleQuantity);
+    if (isNaN(qty) || qty <= 0) {
+      toast.error("La cantidad debe ser un número positivo");
+      return;
+    }
+
+    if (qty > quickSaleProduct.stock) {
+      toast.error(`Solo hay ${quickSaleProduct.stock} unidades disponibles`);
+      return;
+    }
+
+    const price = Number(quickSalePrice);
+    if (isNaN(price) || price <= 0) {
+      toast.error("El precio debe ser un número positivo");
+      return;
+    }
+
+    try {
+      setQuickSaleLoading(true);
+
+      // 1. Crear una venta directa (sin cliente)
+      const totalAmount = qty * price;
+      const today = new Date().toISOString();
+
+      // Crear la venta en la tabla orders pero con tipo "quick_sale"
+      const { data: saleData, error: saleError } = await supabase
+        .from("orders")
+        .insert([
+          {
+            status: "delivered", // Siempre entregada (es una venta directa)
+            total_price: totalAmount,
+            delivery_date: today,
+            description:
+              quickSaleNote || `Venta rápida: ${quickSaleProduct.name}`,
+            order_type: "quick_sale", // Nuevo campo para distinguir ventas rápidas
+          },
+        ])
+        .select()
+        .single();
+
+      if (saleError) throw saleError;
+
+      // 2. Registrar el item vendido
+      const { error: itemError } = await supabase.from("order_items").insert([
+        {
+          order_id: saleData.id,
+          piece_id: quickSaleProduct.id,
+          quantity: qty,
+          price_per_unit: price,
+        },
+      ]);
+
+      if (itemError) throw itemError;
+
+      // 3. Actualizar el stock del producto
+      const newStock = Math.max(0, quickSaleProduct.stock - qty);
+      const { error: updateError } = await supabase
+        .from("pieces")
+        .update({ stock: newStock })
+        .eq("id", quickSaleProduct.id);
+
+      if (updateError) throw updateError;
+
+      // 4. Actualizar la lista de piezas en el estado
+      await fetchPieces();
+
+      toast.success("Venta realizada con éxito");
+      fetchOrders();
+      setQuickSaleModalVisible(false);
+      resetQuickSaleForm();
+    } catch (error) {
+      console.error("Error al procesar la venta rápida:", error);
+      toast.error("Error al procesar la venta");
+    } finally {
+      setQuickSaleLoading(false);
+    }
+  };
+
+  // Resetear formulario de venta rápida
+  const resetQuickSaleForm = () => {
+    setQuickSaleProduct(null);
+    setQuickSaleQuantity("1");
+    setQuickSalePrice("");
+    setQuickSaleNote("");
+    setProductSearchQuery("");
+  };
+
   const handleSaveOrder = async () => {
     // Validaciones
     if (!selectedClient) {
@@ -349,8 +477,15 @@ export default function OrdersScreen() {
       return;
     }
 
-    if (orderItems.length === 0) {
-      toast.error("Debes añadir al menos un producto");
+    if (orderItems.length === 0 && !orderDescription.trim()) {
+      toast.error("Debes añadir al menos un producto o una descripción");
+      return;
+    }
+
+    // Validar que la seña no sea mayor que el total
+    const depositAmount = deposit ? parseFloat(deposit) : 0;
+    if (depositAmount > totalPrice) {
+      toast.error("La seña no puede ser mayor que el total del pedido");
       return;
     }
 
@@ -361,6 +496,9 @@ export default function OrdersScreen() {
         status: orderStatus,
         delivery_date: deliveryDate.toISOString(),
         total_price: totalPrice,
+        description: orderDescription.trim(),
+        order_type: "standard",
+        deposit: depositAmount || null,
       };
       const itemsData = orderItems.map((item) => ({
         piece_id: item.piece_id,
@@ -398,7 +536,6 @@ export default function OrdersScreen() {
           onPress: async () => {
             try {
               await deleteOrder(id);
-              toast.success("Pedido eliminado correctamente");
             } catch (error) {
               console.error("Error deleting order:", error);
               toast.error("Error al eliminar el pedido");
@@ -428,19 +565,43 @@ export default function OrdersScreen() {
   };
   const renderOrderItem = ({ item }) => {
     if (!item) return null;
-    const clientName = item.client_name
+
+    // Determinar si es una venta rápida
+    const isQuickSale = item.order_type === "quick_sale";
+
+    // Obtener nombre del cliente o marcarlo como venta rápida
+    const clientName = isQuickSale
+      ? "Venta Rápida"
+      : item.client_name
       ? item.client_name
       : "Cliente desconocido";
 
     return (
       <TouchableOpacity
-        style={[styles.orderCard, { backgroundColor: colors.card }]}
+        style={[
+          styles.orderCard,
+          { backgroundColor: colors.card },
+          isQuickSale && {
+            borderLeftWidth: 4,
+            borderLeftColor: colors.success,
+          },
+        ]}
         onPress={() => openEditModal(item)}
       >
         <View style={styles.orderHeader}>
-          <Text style={[styles.clientName, { color: colors.text }]}>
-            {clientName}
-          </Text>
+          <View style={styles.clientNameContainer}>
+            {item.order_type === "quick_sale" && (
+              <Ionicons
+                name="flash"
+                size={18}
+                color={colors.success}
+                style={styles.quickSaleIcon}
+              />
+            )}
+            <Text style={[styles.clientName, { color: colors.text }]}>
+              {clientName}
+            </Text>
+          </View>
           <TouchableOpacity onPress={() => handleToggleOrderStatus(item)}>
             <View
               style={[
@@ -484,49 +645,78 @@ export default function OrdersScreen() {
             </TouchableOpacity>
           </View>
         </View>
-
         <View style={[styles.orderDetails, { borderColor: colors.border }]}>
+          {item.description && (
+            <View style={styles.descriptionContainer}>
+              <Text
+                style={[
+                  styles.descriptionLabel,
+                  { color: colors.textTertiary },
+                ]}
+              >
+                Descripción:
+              </Text>
+              <Text
+                style={[
+                  styles.descriptionText,
+                  { color: colors.textSecondary },
+                ]}
+              >
+                {item.description}
+              </Text>
+            </View>
+          )}
+
           {item.items && Array.isArray(item.items) && item.items.length > 0 ? (
-            item.items.map((orderItem, index) => {
-              if (!orderItem) return null;
+            <>
+              {item.description && (
+                <View
+                  style={[
+                    styles.itemsDivider,
+                    { backgroundColor: colors.border },
+                  ]}
+                />
+              )}
+              {item.items.map((orderItem, index) => {
+                if (!orderItem) return null;
 
-              const piece =
-                pieces && Array.isArray(pieces)
-                  ? pieces.find((p) => p && p.id === orderItem.piece_id)
-                  : null;
+                const piece =
+                  pieces && Array.isArray(pieces)
+                    ? pieces.find((p) => p && p.id === orderItem.piece_id)
+                    : null;
 
-              return (
-                <View style={styles.productRow} key={index}>
-                  <Text
-                    style={[
-                      styles.productText,
-                      { color: colors.textSecondary },
-                    ]}
-                  >
-                    {piece
-                      ? `${piece.name} x ${orderItem.quantity}`
-                      : "Producto desconocido"}
-                  </Text>
-                  <Text
-                    style={[
-                      styles.productText,
-                      { color: colors.textSecondary },
-                    ]}
-                  >
-                    {piece
-                      ? `$${orderItem.price_per_unit.toFixed(2)}`
-                      : "Precio desconocido"}
-                  </Text>
-                </View>
-              );
-            })
-          ) : (
+                return (
+                  <View style={styles.productRow} key={index}>
+                    <Text
+                      style={[
+                        styles.productText,
+                        { color: colors.textSecondary },
+                      ]}
+                    >
+                      {piece
+                        ? `${piece.name} x ${orderItem.quantity}`
+                        : "Producto desconocido"}
+                    </Text>
+                    <Text
+                      style={[
+                        styles.productText,
+                        { color: colors.textSecondary },
+                      ]}
+                    >
+                      {piece
+                        ? `$${orderItem.price_per_unit.toFixed(2)}`
+                        : "Precio desconocido"}
+                    </Text>
+                  </View>
+                );
+              })}
+            </>
+          ) : !item.description ? (
             <Text style={[styles.productText, { color: colors.textSecondary }]}>
               No hay productos en este pedido
             </Text>
-          )}
+          ) : null}
         </View>
-
         <View style={styles.orderFooter}>
           <View>
             <Text style={[styles.dateLabel, { color: colors.textTertiary }]}>
@@ -536,19 +726,47 @@ export default function OrdersScreen() {
               {formatDate(item.delivery_date)}
             </Text>
           </View>
-
           <View style={styles.priceContainer}>
-            <Text style={[styles.priceLabel, { color: colors.textTertiary }]}>
-              Total:
-            </Text>
-            <Text style={[styles.priceText, { color: colors.text }]}>
-              $
-              {item.total_price
-                ? typeof item.total_price === "number"
-                  ? item.total_price.toFixed(2)
-                  : parseFloat(item.total_price).toFixed(2)
-                : "0.00"}
-            </Text>
+            {item.deposit && parseFloat(item.deposit) > 0 ? (
+              <>
+                <Text
+                  style={[styles.depositLabel, { color: colors.textTertiary }]}
+                >
+                  Seña: ${parseFloat(item.deposit).toFixed(2)}
+                </Text>
+                <View style={styles.totalContainer}>
+                  <Text
+                    style={[styles.priceLabel, { color: colors.textTertiary }]}
+                  >
+                    Total:{" "}
+                  </Text>
+                  <Text style={[styles.priceText, { color: colors.text }]}>
+                    $
+                    {item.total_price
+                      ? typeof item.total_price === "number"
+                        ? item.total_price
+                        : parseFloat(item.total_price)
+                      : "0.00"}
+                  </Text>
+                </View>
+              </>
+            ) : (
+              <>
+                <Text
+                  style={[styles.priceLabel, { color: colors.textTertiary }]}
+                >
+                  Total:{" "}
+                </Text>
+                <Text style={[styles.priceText, { color: colors.text }]}>
+                  $
+                  {item.total_price
+                    ? typeof item.total_price === "number"
+                      ? item.total_price.toFixed(2)
+                      : parseFloat(item.total_price).toFixed(2)
+                    : "0.00"}
+                </Text>
+              </>
+            )}
           </View>
         </View>
       </TouchableOpacity>
@@ -638,6 +856,12 @@ export default function OrdersScreen() {
         </View>
       </TouchableOpacity>
     );
+  }; // Estado para controlar la visibilidad del menú FAB
+  const [showFabMenu, setShowFabMenu] = useState(false);
+
+  // Función para alternar la visibilidad del menú FAB
+  const toggleFabMenu = () => {
+    setShowFabMenu(!showFabMenu);
   };
 
   return (
@@ -676,71 +900,112 @@ export default function OrdersScreen() {
         )}
       </View>
       <View style={styles.filterContainer}>
-        <TouchableOpacity
-          style={[
-            styles.filterChip,
-            {
-              backgroundColor:
-                filterStatus === "all" ? colors.primary : colors.border,
-            },
-          ]}
-          onPress={() => setFilterStatus("all")}
-        >
-          <Text
+        <ScrollView horizontal showsHorizontalScrollIndicator={false}>
+          <TouchableOpacity
             style={[
-              styles.filterText,
+              styles.filterChip,
               {
-                color: filterStatus === "all" ? "white" : colors.textSecondary,
+                backgroundColor:
+                  filterStatus === "all" ? colors.primary : colors.border,
               },
             ]}
+            onPress={() => setFilterStatus("all")}
           >
-            Todos
-          </Text>
-        </TouchableOpacity>
-        <TouchableOpacity
-          style={[
-            styles.filterChip,
-            {
-              backgroundColor:
-                filterStatus === "pending" ? colors.primary : colors.border,
-            },
-          ]}
-          onPress={() => setFilterStatus("pending")}
-        >
-          <Text
+            <Text
+              style={[
+                styles.filterText,
+                {
+                  color:
+                    filterStatus === "all" ? "white" : colors.textSecondary,
+                },
+              ]}
+            >
+              Todos
+            </Text>
+          </TouchableOpacity>
+          <TouchableOpacity
             style={[
-              styles.filterText,
+              styles.filterChip,
               {
-                color:
-                  filterStatus === "pending" ? "white" : colors.textSecondary,
+                backgroundColor:
+                  filterStatus === "pending" ? colors.primary : colors.border,
               },
             ]}
+            onPress={() => setFilterStatus("pending")}
           >
-            Pendientes
-          </Text>
-        </TouchableOpacity>
-        <TouchableOpacity
-          style={[
-            styles.filterChip,
-            {
-              backgroundColor:
-                filterStatus === "delivered" ? colors.primary : colors.border,
-            },
-          ]}
-          onPress={() => setFilterStatus("delivered")}
-        >
-          <Text
+            <Text
+              style={[
+                styles.filterText,
+                {
+                  color:
+                    filterStatus === "pending" ? "white" : colors.textSecondary,
+                },
+              ]}
+            >
+              Pendientes
+            </Text>
+          </TouchableOpacity>
+          <TouchableOpacity
             style={[
-              styles.filterText,
+              styles.filterChip,
               {
-                color:
-                  filterStatus === "delivered" ? "white" : colors.textSecondary,
+                backgroundColor:
+                  filterStatus === "delivered" ? colors.primary : colors.border,
               },
             ]}
+            onPress={() => setFilterStatus("delivered")}
           >
-            Entregados
-          </Text>
-        </TouchableOpacity>
+            <Text
+              style={[
+                styles.filterText,
+                {
+                  color:
+                    filterStatus === "delivered"
+                      ? "white"
+                      : colors.textSecondary,
+                },
+              ]}
+            >
+              Entregados
+            </Text>
+          </TouchableOpacity>
+          <TouchableOpacity
+            style={[
+              styles.filterChip,
+              {
+                backgroundColor:
+                  filterStatus === "quick_sale"
+                    ? colors.success
+                    : colors.border,
+              },
+            ]}
+            onPress={() => setFilterStatus("quick_sale")}
+          >
+            <View style={styles.filterChipContent}>
+              <Ionicons
+                name="flash"
+                size={14}
+                color={
+                  filterStatus === "quick_sale" ? "white" : colors.textSecondary
+                }
+              />
+              <Text
+                style={[
+                  styles.filterText,
+                  {
+                    color:
+                      filterStatus === "quick_sale"
+                        ? "white"
+                        : colors.textSecondary,
+                    marginLeft: 4,
+                  },
+                ]}
+              >
+                Ventas Rápidas
+              </Text>
+            </View>
+          </TouchableOpacity>
+        </ScrollView>
       </View>
       {loading && (!filteredOrders || filteredOrders.length === 0) ? (
         <View style={styles.loadingContainer}>
@@ -775,12 +1040,49 @@ export default function OrdersScreen() {
           )}
         />
       )}
-      <TouchableOpacity
-        style={[styles.fab, { backgroundColor: colors.primary }]}
-        onPress={openAddModal}
-      >
-        <Ionicons name="add" size={24} color="white" />
-      </TouchableOpacity>
+      {/* FAB con menú desplegable */}
+      <View style={styles.fabContainer}>
+        {showFabMenu && (
+          <View style={styles.fabMenu}>
+            <TouchableOpacity
+              style={[styles.fabMenuItem, { backgroundColor: colors.card }]}
+              onPress={() => {
+                setShowFabMenu(false);
+                openAddModal();
+              }}
+            >
+              <Ionicons name="add-circle" size={20} color={colors.primary} />
+              <Text style={[styles.fabMenuItemText, { color: colors.text }]}>
+                Nuevo Pedido
+              </Text>
+            </TouchableOpacity>
+
+            <TouchableOpacity
+              style={[styles.fabMenuItem, { backgroundColor: colors.card }]}
+              onPress={() => {
+                setShowFabMenu(false);
+                setQuickSaleModalVisible(true);
+              }}
+            >
+              <Ionicons name="flash" size={20} color="#4CAF50" />
+              <Text style={[styles.fabMenuItemText, { color: colors.text }]}>
+                Venta Rápida
+              </Text>
+            </TouchableOpacity>
+          </View>
+        )}
+
+        <TouchableOpacity
+          style={[styles.fab, { backgroundColor: colors.primary }]}
+          onPress={toggleFabMenu}
+        >
+          <Ionicons
+            name={showFabMenu ? "close" : "add"}
+            size={24}
+            color="white"
+          />
+        </TouchableOpacity>
+      </View>
       {/* Modal para crear/editar pedido */}
       <Modal
         visible={modalVisible}
@@ -862,7 +1164,6 @@ export default function OrdersScreen() {
                   </TouchableOpacity>
                 )}
               </View>
-
               {/* Fecha de entrega */}
               <View style={styles.formGroup}>
                 <Text
@@ -893,7 +1194,6 @@ export default function OrdersScreen() {
                   />
                 )}
               </View>
-
               {/* Estado */}
               <View style={styles.formGroup}>
                 <Text
@@ -983,7 +1283,80 @@ export default function OrdersScreen() {
                   </TouchableOpacity>
                 </View>
               </View>
-
+              {/* Descripción */}
+              <View style={styles.formGroup}>
+                <Text
+                  style={[styles.formLabel, { color: colors.textSecondary }]}
+                >
+                  Descripción
+                </Text>
+                <TextInput
+                  style={[
+                    styles.input,
+                    {
+                      backgroundColor: colors.background,
+                      color: colors.text,
+                      borderColor: colors.border,
+                      minHeight: 70,
+                      textAlignVertical: "top",
+                      paddingVertical: 12,
+                      paddingHorizontal: 12,
+                      borderRadius: 8,
+                    },
+                  ]}
+                  placeholder="Describa los detalles del pedido..."
+                  placeholderTextColor={colors.textTertiary}
+                  value={orderDescription}
+                  onChangeText={setOrderDescription}
+                  multiline={true}
+                  numberOfLines={10}
+                />
+              </View>
+              {/* Seña/Adelanto */}
+              <View style={styles.formGroup}>
+                <Text
+                  style={[styles.formLabel, { color: colors.textSecondary }]}
+                >
+                  Seña/Adelanto (opcional)
+                </Text>
+                <TextInput
+                  style={[
+                    styles.input,
+                    {
+                      backgroundColor: colors.background,
+                      color: colors.text,
+                      borderColor: colors.border,
+                      paddingVertical: 12,
+                      paddingHorizontal: 12,
+                      borderRadius: 8,
+                    },
+                  ]}
+                  placeholder="Cantidad pagada como adelanto"
+                  placeholderTextColor={colors.textTertiary}
+                  value={deposit}
+                  onChangeText={setDeposit}
+                  keyboardType="numeric"
+                />
+                {deposit && totalPrice > 0 && (
+                  <Text
+                    style={[
+                      styles.depositInfo,
+                      {
+                        color:
+                          parseFloat(deposit) > totalPrice
+                            ? colors.error
+                            : colors.success,
+                      },
+                    ]}
+                  >
+                    {parseFloat(deposit) > totalPrice
+                      ? "La seña excede el total del pedido"
+                      : `Restante a pagar: $${(
+                          totalPrice - parseFloat(deposit)
+                        ).toFixed(2)}`}
+                  </Text>
+                )}
+              </View>
               {/* Productos */}
               <View style={styles.formGroup}>
                 <View style={styles.formGroupHeader}>
@@ -1055,22 +1428,6 @@ export default function OrdersScreen() {
                         </View>
                       </View>
                     ))}
-
-                    <View style={styles.totalContainer}>
-                      <Text
-                        style={[
-                          styles.totalLabel,
-                          { color: colors.textSecondary },
-                        ]}
-                      >
-                        Total:
-                      </Text>
-                      <Text
-                        style={[styles.totalAmount, { color: colors.text }]}
-                      >
-                        ${totalPrice.toFixed(2)}
-                      </Text>
-                    </View>
                   </View>
                 ) : (
                   <View
@@ -1089,6 +1446,33 @@ export default function OrdersScreen() {
                     </Text>
                   </View>
                 )}
+              </View>
+              <View style={styles.totalContainer}>
+                <Text
+                  style={[styles.totalLabel, { color: colors.textSecondary }]}
+                >
+                  Total:
+                </Text>
+                {/* Total manual o calculado */}
+                <View style={styles.totalInputContainer}>
+                  <Text
+                    style={{
+                      color: colors.textSecondary,
+                      marginRight: 8,
+                    }}
+                  >
+                    22 $
+                  </Text>
+                  <TextInput
+                    style={[styles.totalInput, { color: colors.text }]}
+                    value={String(totalPrice)}
+                    onChangeText={(text) => {
+                      const value = parseFloat(text.replace(/[^0-9.]/g, ""));
+                      setTotalPrice(isNaN(value) ? 0 : value);
+                    }}
+                    keyboardType="numeric"
+                  />
+                </View>
               </View>
             </ScrollView>
 
@@ -1126,6 +1510,7 @@ export default function OrdersScreen() {
           </View>
         </View>
       </Modal>
+
       {/* Modal para seleccionar cliente */}
       <Modal
         visible={showClientModal}
@@ -1182,6 +1567,7 @@ export default function OrdersScreen() {
           </View>
         </View>
       </Modal>
+
       {/* Modal para añadir/editar producto */}
       <Modal
         visible={showProductModal}
@@ -1376,6 +1762,323 @@ export default function OrdersScreen() {
           </View>
         </View>
       </Modal>
+      {/* Modal para venta rápida */}
+      <Modal
+        visible={quickSaleModalVisible}
+        animationType="slide"
+        transparent={true}
+        onRequestClose={() => setQuickSaleModalVisible(false)}
+      >
+        <View style={styles.modalContainer}>
+          <View style={[styles.modalContent, { backgroundColor: colors.card }]}>
+            <View style={styles.modalHeader}>
+              <Text style={[styles.modalTitle, { color: colors.text }]}>
+                Venta Rápida
+              </Text>
+              <TouchableOpacity onPress={() => setQuickSaleModalVisible(false)}>
+                <Ionicons name="close" size={24} color={colors.text} />
+              </TouchableOpacity>
+            </View>
+
+            <View style={styles.modalBody}>
+              {/* Selector de producto */}
+              <View style={styles.formGroup}>
+                <Text
+                  style={[styles.formLabel, { color: colors.textSecondary }]}
+                >
+                  Producto *
+                </Text>
+                <View
+                  style={[
+                    styles.productSearchContainer,
+                    { backgroundColor: colors.background },
+                  ]}
+                >
+                  <Ionicons
+                    name="search"
+                    size={20}
+                    color={colors.textTertiary}
+                  />
+                  <TextInput
+                    style={[styles.searchInput, { color: colors.text }]}
+                    placeholder="Buscar producto..."
+                    placeholderTextColor={colors.textTertiary}
+                    value={productSearchQuery}
+                    onChangeText={setProductSearchQuery}
+                  />
+                  {productSearchQuery !== "" && (
+                    <TouchableOpacity
+                      onPress={() => setProductSearchQuery("")}
+                      style={styles.searchClearButton}
+                    >
+                      <Ionicons
+                        name="close-circle"
+                        size={20}
+                        color={colors.textTertiary}
+                      />
+                    </TouchableOpacity>
+                  )}
+                </View>
+
+                <View
+                  style={[
+                    styles.productsListContainer,
+                    { backgroundColor: colors.background, height: 250 },
+                  ]}
+                >
+                  <FlatList
+                    data={filteredPieces}
+                    renderItem={({ item }) => (
+                      <TouchableOpacity
+                        style={[
+                          styles.pieceItem,
+                          { borderBottomColor: colors.border },
+                        ]}
+                        onPress={() => {
+                          setQuickSaleProduct(item);
+                          setQuickSalePrice(String(item.retail_price || 0));
+                          setQuickSaleQuantity(
+                            String(Math.min(1, item.stock || 1))
+                          );
+                        }}
+                      >
+                        <Image
+                          source={{
+                            uri:
+                              item.image_url ||
+                              `https://api.a0.dev/assets/image?text=3D printed ${encodeURIComponent(
+                                item.name
+                              )}&aspect=1:1`,
+                          }}
+                          style={styles.pieceImage}
+                        />
+                        <View style={styles.pieceItemContent}>
+                          <Text
+                            style={[
+                              styles.pieceItemName,
+                              { color: colors.text },
+                            ]}
+                          >
+                            {item.name}
+                          </Text>
+                          <Text
+                            style={[
+                              styles.pieceItemDetail,
+                              {
+                                color:
+                                  item.stock > 0
+                                    ? colors.textSecondary
+                                    : colors.error,
+                              },
+                            ]}
+                          >
+                            Stock: {item.stock || 0} | Precio: $
+                            {item.retail_price?.toFixed(2) || "0.00"}
+                          </Text>
+                        </View>
+                        <View
+                          style={[
+                            styles.pieceSelectedIndicator,
+                            {
+                              backgroundColor:
+                                quickSaleProduct &&
+                                quickSaleProduct.id === item.id
+                                  ? colors.primary
+                                  : "transparent",
+                            },
+                          ]}
+                        >
+                          {quickSaleProduct &&
+                            quickSaleProduct.id === item.id && (
+                              <Ionicons
+                                name="checkmark"
+                                size={18}
+                                color="white"
+                              />
+                            )}
+                        </View>
+                      </TouchableOpacity>
+                    )}
+                    keyExtractor={(item) =>
+                      item?.id || Math.random().toString()
+                    }
+                    style={styles.productsList}
+                    ListEmptyComponent={() => (
+                      <View style={styles.emptyListContainer}>
+                        <Text
+                          style={[
+                            styles.emptyListText,
+                            { color: colors.textSecondary },
+                          ]}
+                        >
+                          {productSearchQuery
+                            ? "No se encontraron productos con ese nombre"
+                            : "No hay productos disponibles"}
+                        </Text>
+                      </View>
+                    )}
+                  />
+                </View>
+              </View>
+
+              {quickSaleProduct && (
+                <>
+                  <View style={styles.quantityPriceContainer}>
+                    {/* Cantidad */}
+                    <View style={[styles.formGroup, styles.quantityInput]}>
+                      <Text
+                        style={[
+                          styles.formLabel,
+                          { color: colors.textSecondary },
+                        ]}
+                      >
+                        Cantidad *
+                        {quickSaleProduct &&
+                          `(máx: ${quickSaleProduct.stock || 0})`}
+                      </Text>
+                      <TextInput
+                        style={[
+                          styles.textInput,
+                          {
+                            backgroundColor: colors.background,
+                            color: colors.text,
+                          },
+                        ]}
+                        keyboardType="numeric"
+                        value={quickSaleQuantity}
+                        onChangeText={(value) => {
+                          if (quickSaleProduct && quickSaleProduct.stock) {
+                            const numValue = parseInt(value) || 0;
+                            if (numValue > quickSaleProduct.stock) {
+                              setQuickSaleQuantity(
+                                String(quickSaleProduct.stock)
+                              );
+                              return;
+                            }
+                          }
+                          setQuickSaleQuantity(value);
+                        }}
+                        placeholder="1"
+                        placeholderTextColor={colors.textTertiary}
+                      />
+                    </View>
+
+                    {/* Precio unitario */}
+                    <View style={[styles.formGroup, styles.priceInput]}>
+                      <Text
+                        style={[
+                          styles.formLabel,
+                          { color: colors.textSecondary },
+                        ]}
+                      >
+                        Precio Unitario *
+                      </Text>
+                      <TextInput
+                        style={[
+                          styles.textInput,
+                          {
+                            backgroundColor: colors.background,
+                            color: colors.text,
+                          },
+                        ]}
+                        keyboardType="decimal-pad"
+                        value={quickSalePrice}
+                        onChangeText={setQuickSalePrice}
+                        placeholder="0.00"
+                        placeholderTextColor={colors.textTertiary}
+                      />
+                    </View>
+                  </View>
+
+                  {/* Nota opcional */}
+                  <View style={styles.formGroup}>
+                    <Text
+                      style={[
+                        styles.formLabel,
+                        { color: colors.textSecondary },
+                      ]}
+                    >
+                      Nota (opcional)
+                    </Text>
+                    <TextInput
+                      style={[
+                        styles.textInput,
+                        {
+                          backgroundColor: colors.background,
+                          color: colors.text,
+                          height: 80,
+                        },
+                      ]}
+                      multiline
+                      numberOfLines={10}
+                      value={quickSaleNote}
+                      onChangeText={setQuickSaleNote}
+                      placeholder="Detalles adicionales de la venta..."
+                      placeholderTextColor={colors.textTertiary}
+                    />
+                  </View>
+
+                  {/* Subtotal */}
+                  <View style={styles.subtotalContainer}>
+                    <Text
+                      style={[
+                        styles.subtotalLabel,
+                        { color: colors.textSecondary },
+                      ]}
+                    >
+                      Total:
+                    </Text>
+                    <Text
+                      style={[styles.subtotalAmount, { color: colors.text }]}
+                    >
+                      $
+                      {(
+                        Number(quickSaleQuantity || 0) *
+                        Number(quickSalePrice || 0)
+                      ).toFixed(2)}
+                    </Text>
+                  </View>
+                </>
+              )}
+            </View>
+
+            <View style={styles.modalFooter}>
+              <TouchableOpacity
+                style={[
+                  styles.modalButton,
+                  styles.cancelButton,
+                  { backgroundColor: isDarkMode ? "#2C2C2C" : "#F0F0F0" },
+                ]}
+                onPress={() => setQuickSaleModalVisible(false)}
+              >
+                <Text
+                  style={[
+                    styles.cancelButtonText,
+                    { color: colors.textSecondary },
+                  ]}
+                >
+                  Cancelar
+                </Text>
+              </TouchableOpacity>
+              <TouchableOpacity
+                style={[
+                  styles.modalButton,
+                  styles.saveButton,
+                  { backgroundColor: colors.success },
+                ]}
+                onPress={handleQuickSale}
+                disabled={quickSaleLoading || !quickSaleProduct}
+              >
+                {quickSaleLoading ? (
+                  <ActivityIndicator size="small" color="white" />
+                ) : (
+                  <Text style={styles.saveButtonText}>Vender</Text>
+                )}
+              </TouchableOpacity>
+            </View>
+          </View>
+        </View>
+      </Modal>
     </SafeAreaView>
   );
 }
@@ -1413,19 +2116,28 @@ const styles = StyleSheet.create({
   searchCloseButton: {
     paddingHorizontal: 8,
   },
+  filterScrollView: {
+    paddingHorizontal: 24,
+  },
   filterContainer: {
     flexDirection: "row",
     paddingHorizontal: 24,
-    marginBottom: 20,
   },
   filterChip: {
-    paddingVertical: 8,
-    paddingHorizontal: 16,
+    paddingVertical: 6,
+    paddingHorizontal: 14,
     marginRight: 8,
-    borderRadius: 20,
+    borderRadius: 16,
+    height: 32,
+    justifyContent: "center",
+  },
+  filterChipContent: {
+    flexDirection: "row",
+    alignItems: "center",
+    height: 20,
   },
   filterText: {
-    fontSize: 14,
+    fontSize: 13,
     fontWeight: "500",
   },
   productRow: {
@@ -1452,6 +2164,7 @@ const styles = StyleSheet.create({
     fontSize: 16,
   },
   listContainer: {
+    paddingTop: 10,
     paddingHorizontal: 24,
     paddingBottom: 80,
   },
@@ -1471,9 +2184,16 @@ const styles = StyleSheet.create({
     alignItems: "center",
     marginBottom: 12,
   },
+  clientNameContainer: {
+    flexDirection: "row",
+    alignItems: "center",
+  },
   clientName: {
     fontSize: 16,
     fontWeight: "bold",
+  },
+  quickSaleIcon: {
+    marginRight: 4,
   },
   statusBadge: {
     paddingHorizontal: 12,
@@ -1494,6 +2214,21 @@ const styles = StyleSheet.create({
     fontSize: 14,
     marginBottom: 4,
   },
+  descriptionContainer: {
+    marginBottom: 8,
+  },
+  descriptionLabel: {
+    fontSize: 12,
+    marginBottom: 4,
+  },
+  descriptionText: {
+    fontSize: 14,
+    fontStyle: "italic",
+  },
+  itemsDivider: {
+    height: 1,
+    marginVertical: 8,
+  },
   orderFooter: {
     flexDirection: "row",
     justifyContent: "space-between",
@@ -1510,8 +2245,8 @@ const styles = StyleSheet.create({
     alignItems: "flex-end",
   },
   priceLabel: {
-    fontSize: 12,
-    marginBottom: 2,
+    fontSize: 16,
+    fontWeight: "bold",
   },
   priceText: {
     fontSize: 18,
@@ -1546,11 +2281,35 @@ const styles = StyleSheet.create({
     color: "white",
     fontWeight: "500",
   },
-
-  fab: {
+  fabContainer: {
     position: "absolute",
     bottom: 20,
     right: 20,
+    alignItems: "flex-end",
+  },
+  fabMenu: {
+    marginBottom: 10,
+    borderRadius: 8,
+    overflow: "hidden",
+    shadowColor: "#000",
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.25,
+    shadowRadius: 3.84,
+    elevation: 5,
+  },
+  fabMenuItem: {
+    flexDirection: "row",
+    alignItems: "center",
+    paddingVertical: 12,
+    paddingHorizontal: 16,
+    width: 170,
+  },
+  fabMenuItemText: {
+    marginLeft: 8,
+    fontSize: 14,
+    fontWeight: "500",
+  },
+  fab: {
     width: 56,
     height: 56,
     borderRadius: 28,
@@ -1872,6 +2631,18 @@ const styles = StyleSheet.create({
     fontSize: 18,
     fontWeight: "bold",
   },
+  totalInputContainer: {
+    flexDirection: "row",
+    alignItems: "center",
+    borderBottomWidth: 1,
+    borderBottomColor: "#E0E0E0",
+  },
+  totalInput: {
+    fontSize: 18,
+    fontWeight: "bold",
+    minWidth: 80,
+    padding: 2,
+  },
 
   // Estados vacíos
   emptyListContainer: {
@@ -1882,5 +2653,14 @@ const styles = StyleSheet.create({
   },
   emptyListText: {
     fontSize: 14,
+  },
+  depositInfo: {
+    marginTop: 8,
+    fontSize: 13,
+    fontStyle: "italic",
+  },
+  depositLabel: {
+    fontSize: 14,
+    marginBottom: 2,
   },
 });

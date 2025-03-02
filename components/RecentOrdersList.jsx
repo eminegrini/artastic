@@ -82,7 +82,11 @@ export const RecentOrdersList = () => {
     >
       <View style={styles.orderLeftContent}>
         <Text style={[styles.clientName, { color: colors.text }]}>
-          {item.client ? item.client.name : "Cliente desconocido"}
+          {item.client_name
+            ? item.client_name
+            : item.order_type === "quick_sale"
+            ? "Venta rápida"
+            : "Pedido sin cliente"}
         </Text>
         <Text style={[styles.orderDetail, { color: colors.textSecondary }]}>
           {item.items && item.items.length > 0

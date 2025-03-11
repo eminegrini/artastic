@@ -179,7 +179,9 @@ export default function OrdersScreen() {
     const total = orderItems.reduce((sum, item) => {
       return sum + Number(item.quantity) * Number(item.price_per_unit);
     }, 0);
-    setTotalPrice(total);
+    if (total > 0) {
+      setTotalPrice(total);
+    }
   }, [orderItems]);
 
   const toggleSearch = () => {
@@ -233,33 +235,15 @@ export default function OrdersScreen() {
   const openEditModal = (order) => {
     if (!order) return;
     setIsEditing(true);
+
     setCurrentOrder(order);
-    // Cargar datos del pedido
-    setSelectedClient(order.client || null);
+    setSelectedClient(order.clients || null);
     setOrderStatus(order.status || "pending");
     setOrderDescription(order.description || "");
-
-    // Cargar seña/depósito
     setDeposit(order.deposit ? String(order.deposit) : "");
 
-    // Configurar fecha de entrega
-    if (order.delivery_date) {
-      try {
-        const date = new Date(order.delivery_date);
-        if (!isNaN(date.getTime())) {
-          setDeliveryDate(date);
-        } else {
-          setDeliveryDate(new Date());
-        }
-      } catch (e) {
-        setDeliveryDate(new Date());
-      }
-    } else {
-      setDeliveryDate(new Date());
-    }
-
     // Cargar items del pedido
-    if (order.items && Array.isArray(order.items)) {
+    if (order.items && Array.isArray(order.items) && order.items.length > 0) {
       const items = order.items.map((item) => {
         const piece = pieces.find((p) => p && p.id === item.piece_id);
         return {
@@ -269,9 +253,32 @@ export default function OrdersScreen() {
           price_per_unit: item.price_per_unit,
         };
       });
+      const total = items.reduce((sum, item) => {
+        return sum + Number(item.quantity) * Number(item.price_per_unit);
+      }, 0);
+      setTotalPrice(order.total_price || total);
+
+      // Configurar fecha de entrega
+      if (order.delivery_date) {
+        try {
+          const date = new Date(order.delivery_date);
+          if (!isNaN(date.getTime())) {
+            setDeliveryDate(date);
+          } else {
+            setDeliveryDate(new Date());
+          }
+        } catch (e) {
+          setDeliveryDate(new Date());
+        }
+      } else {
+        setDeliveryDate(new Date());
+      }
+
       setOrderItems(items);
     } else {
       setOrderItems([]);
+      // Si no hay items, usar el total cargado directamente del pedido
+      setTotalPrice(order.total_price || 0);
     }
 
     setModalVisible(true);
@@ -295,16 +302,6 @@ export default function OrdersScreen() {
     setShowProductModal(true);
   };
 
-  const openEditItemModal = (index) => {
-    const item = orderItems[index];
-    if (!item) return;
-
-    setSelectedPiece(item.piece);
-    setQuantity(String(item.quantity));
-    setPricePerUnit(String(item.price_per_unit));
-    setEditingItemIndex(index);
-    setShowProductModal(true);
-  };
   const handleAddOrUpdateItem = () => {
     if (!selectedPiece) {
       toast.error("Debes seleccionar un producto");
@@ -449,7 +446,6 @@ export default function OrdersScreen() {
       // 4. Actualizar la lista de piezas en el estado
       await fetchPieces();
 
-      toast.success("Venta realizada con éxito");
       fetchOrders();
       setQuickSaleModalVisible(false);
       resetQuickSaleForm();
@@ -499,6 +495,7 @@ export default function OrdersScreen() {
         description: orderDescription.trim(),
         order_type: "standard",
         deposit: depositAmount || null,
+        total_price: totalPrice,
       };
       const itemsData = orderItems.map((item) => ({
         piece_id: item.piece_id,
@@ -508,10 +505,8 @@ export default function OrdersScreen() {
 
       if (isEditing && currentOrder) {
         await updateOrder(currentOrder.id, orderData);
-        toast.success("Pedido actualizado correctamente");
       } else {
         await addOrder(orderData, itemsData);
-        toast.success("Pedido creado correctamente");
       }
 
       setModalVisible(false);
@@ -553,11 +548,6 @@ export default function OrdersScreen() {
 
     try {
       await updateOrder(order.id, { status: newStatus });
-      toast.success(
-        `Pedido marcado como ${
-          newStatus === "delivered" ? "entregado" : "pendiente"
-        }`
-      );
     } catch (error) {
       console.error("Error updating order status:", error);
       toast.error("Error al actualizar el estado del pedido");
@@ -755,14 +745,14 @@ export default function OrdersScreen() {
                 <Text
                   style={[styles.priceLabel, { color: colors.textTertiary }]}
                 >
-                  Total:{" "}
+                  Total:
                 </Text>
                 <Text style={[styles.priceText, { color: colors.text }]}>
                   $
                   {item.total_price
                     ? typeof item.total_price === "number"
-                      ? item.total_price.toFixed(2)
-                      : parseFloat(item.total_price).toFixed(2)
+                      ? item.total_price
+                      : parseFloat(item.total_price)
                     : "0.00"}
                 </Text>
               </>
@@ -1461,11 +1451,11 @@ export default function OrdersScreen() {
                       marginRight: 8,
                     }}
                   >
-                    22 $
+                    $
                   </Text>
                   <TextInput
                     style={[styles.totalInput, { color: colors.text }]}
-                    value={String(totalPrice)}
+                    value={totalPrice ? String(totalPrice.toFixed(2)) : "0.00"}
                     onChangeText={(text) => {
                       const value = parseFloat(text.replace(/[^0-9.]/g, ""));
                       setTotalPrice(isNaN(value) ? 0 : value);

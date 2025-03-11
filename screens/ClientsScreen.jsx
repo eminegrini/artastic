@@ -15,7 +15,6 @@ import { SafeAreaView } from "react-native-safe-area-context";
 import { Ionicons, MaterialIcons } from "@expo/vector-icons";
 import { useTheme, getThemeColors } from "../context/ThemeContext";
 import { useAppContext } from "../context/AppContext";
-import { toast } from "sonner-native";
 
 export default function ClientsScreen() {
   const [searchQuery, setSearchQuery] = useState("");
@@ -169,16 +168,13 @@ export default function ClientsScreen() {
 
       if (isEditing && currentClient) {
         await updateClient(currentClient.id, clientData);
-        toast.success("Cliente actualizado correctamente");
       } else {
         await addClient(clientData);
-        toast.success("Cliente añadido correctamente");
       }
 
       setModalVisible(false);
     } catch (error) {
       console.error("Error saving client:", error);
-      toast.error("Error al guardar el cliente");
     } finally {
       setIsSaving(false);
     }
@@ -197,10 +193,8 @@ export default function ClientsScreen() {
           onPress: async () => {
             try {
               await deleteClient(id);
-              toast.success("Cliente eliminado correctamente");
             } catch (error) {
               console.error("Error deleting client:", error);
-              toast.error("Error al eliminar el cliente");
             }
           },
         },

@@ -795,14 +795,25 @@ export default function StockScreen() {
               >
                 <Text style={styles.cancelButtonText}>Cancelar</Text>
               </TouchableOpacity>
-              <TouchableOpacity
-                style={[styles.modalButton, styles.saveButton]}
-                onPress={handleSubmit}
-              >
-                <Text style={styles.saveButtonText}>
-                  {isEditing ? "Actualizar" : "Añadir"}
-                </Text>
-              </TouchableOpacity>
+              {loading ? (
+                <TouchableOpacity
+                  style={[styles.modalButton, styles.saveButton]}
+                ></TouchableOpacity>
+              ) : (
+                <TouchableOpacity
+                  style={[styles.modalButton, styles.saveButton]}
+                  onPress={handleSubmit}
+                  disabled={loading}
+                >
+                  {loading ? (
+                    <ActivityIndicator size="small" color="white" />
+                  ) : (
+                    <Text style={styles.saveButtonText}>
+                      {isEditing ? "Actualizar" : "Añadir"}
+                    </Text>
+                  )}
+                </TouchableOpacity>
+              )}
             </View>
           </View>
         </View>

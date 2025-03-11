@@ -17,7 +17,6 @@ import {
 import { SafeAreaView } from "react-native-safe-area-context";
 import { supabase } from "../services/supabaseClient";
 import { useNavigation } from "@react-navigation/native";
-import { toast } from "sonner-native";
 import { Ionicons } from "@expo/vector-icons";
 import packageJson from "../package.json"; // Importa el archivo package.json
 
@@ -134,8 +133,6 @@ export default function LoginScreen() {
         throw error;
       }
 
-      toast.success("¡Inicio de sesión exitoso!");
-
       // Redirect to the HomeScreen
       navigation.reset({
         index: 0,
@@ -153,8 +150,6 @@ export default function LoginScreen() {
       } else {
         setErrors({ ...errors, general: errorMessage });
       }
-
-      toast.error(errorMessage);
     } finally {
       setLoading(false);
     }
